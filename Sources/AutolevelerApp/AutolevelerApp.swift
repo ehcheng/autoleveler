@@ -80,7 +80,7 @@ final class AppModel: ObservableObject {
         let url: URL
         var state: ItemState = .waiting
         var progress = 0.0
-        var message = "Waiting"
+        var message = "Queued"
         var output: URL?
         var speechDetected: Bool?
         var error: String?
@@ -185,7 +185,7 @@ final class AppModel: ObservableObject {
         guard items[index].state == .failed || items[index].state == .cancelled else { return }
         items[index].state = .waiting
         items[index].progress = 0
-        items[index].message = "Waiting"
+        items[index].message = "Queued"
         items[index].error = nil
         items[index].output = nil
         items[index].speechDetected = nil
