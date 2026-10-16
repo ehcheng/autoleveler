@@ -7,3 +7,5 @@ dist/
 .build-tests/
 .build-packaging/
 __pycache__/
+.build-release/
+.build-validation/

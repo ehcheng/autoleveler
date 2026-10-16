@@ -6,7 +6,7 @@ let package = Package(
     platforms: [.macOS(.v14)],
     products: [
         .library(name: "AutolevelerCore", targets: ["AutolevelerCore"]),
-        .executable(name: "Autoleveler", targets: ["AutolevelerApp"]),
+        .executable(name: "AutolevelerApp", targets: ["AutolevelerApp"]),
         .executable(name: "autoleveler", targets: ["AutolevelerCLI"])
     ],
     targets: [

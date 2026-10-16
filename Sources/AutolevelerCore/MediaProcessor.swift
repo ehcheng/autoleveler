@@ -50,6 +50,9 @@ public final class MediaProcessor: @unchecked Sendable {
         let duration = Double(media.format?.duration ?? "") ?? 0
         let preferredAudio = audio.first(where: { $0.disposition?["default"] == 1 }) ?? audio[0]
         let tracks = keepVideo ? audio : [preferredAudio]
+        if options.codec == .mp3, tracks.contains(where: { ($0.channels ?? 2) > 2 }) {
+            throw AutolevelerError.message("MP3 supports at most two channels. Choose AAC or PCM to preserve this file's channels.")
+        }
         var leveled: [URL] = []
         var detected = false
         for (ordinal, track) in tracks.enumerated() {
@@ -93,14 +96,13 @@ public final class MediaProcessor: @unchecked Sendable {
             arguments += ["-disposition:a:\(index)", disposition.isEmpty ? "0" : disposition]
         }
         // Oversample before limiting; leave codec headroom and compensate limiter latency.
-        let filter = "acompressor=threshold=0.25:ratio=2:attack=15:release=180:makeup=1," +
+        let audioOffset = max(0, (Double(preferredAudio.start_time ?? "") ?? formatStart) - formatStart)
+        let leadingSilence = !keepVideo && audioOffset > 0 ? "adelay=\(Int((audioOffset * 48000).rounded()))S:all=1," : ""
+        let filter = leadingSilence + "acompressor=threshold=0.25:ratio=2:attack=15:release=180:makeup=1," +
             "aresample=192000,alimiter=limit=0.794328:attack=5:release=80:level=false:latency=true,aresample=48000"
         switch options.codec {
         case .aac: arguments += ["-c:a", "aac", "-b:a", "\(options.bitrate)k"]
         case .mp3:
-            if tracks.contains(where: { ($0.channels ?? 2) > 2 }) {
-                throw AutolevelerError.message("MP3 supports at most two channels. Choose AAC or PCM to preserve this file's channels.")
-            }
             arguments += ["-c:a", "libmp3lame", "-b:a", "\(options.bitrate)k"]
         case .pcm:
             arguments += ["-c:a", "pcm_s24le"]
@@ -119,7 +121,7 @@ public final class MediaProcessor: @unchecked Sendable {
             while true {
                 let name = stem + (number == 1 ? "" : "-\(number)") + "." + outputExtension
                 let candidate = destination.appendingPathComponent(name)
-                if link(partial.path, candidate.path) == 0 { output = candidate; break }
+                if renamex_np(partial.path, candidate.path, UInt32(RENAME_EXCL)) == 0 { output = candidate; break }
                 if errno == EEXIST { number += 1; continue }
                 throw AutolevelerError.message("Could not save the output: \(String(cString: strerror(errno))).")
             }
