@@ -1,12 +1,14 @@
 # Autoleveler
 
+**Drag and level!** *Automatic dialogue leveling for audio and video.*
+
 A native Mac app for uneven dialogue. Drop in audio or video, bring quiet speech forward, and keep pauses quiet. Everything runs on your Mac.
 
 **Requires Apple silicon and macOS 14 or later.** The packaged app includes FFmpeg and FFprobe; Homebrew and Python are not required to use it.
 
 ## Use the app
 
-Open `dist/Autoleveler.app`, or unzip `dist/Autoleveler-macOS-arm64.zip`. You can move the app to Applications.
+Open `dist/Autoleveler.app`, or unzip `dist/Autoleveler-1.0.0-beta-macOS-arm64.zip`. You can move the app to Applications.
 
 1. Drop one or more media files into the window, or choose **File → Open** (⌘O).
 2. Choose **Match input**, **Audio only**, or **Video + audio**.
@@ -56,6 +58,12 @@ A gentle compressor controls peaks after leveling. An oversampled limiter leaves
 Speech detection can miss whispers or distant voices and mistake some sounds for speech. Audio buried in noise cannot be made clean by gain alone. If speech is not detected, Autoleveler reports it and applies no gain boost; the output still passes through the peak-control/export stage. No noise gate cuts words or removes the original ambience.
 
 Processing uses temporary decoded audio on disk and streams samples through memory. Long multichannel recordings need substantial free space in the Mac's temporary volume; a partial export is staged in the output folder and published with an exclusive atomic rename.
+
+## Versioning
+
+Current release: **1.0.0 beta**, build **1**. Release notes live in [CHANGELOG.md](CHANGELOG.md).
+
+`Sources/AutolevelerCore/AppVersion.swift` defines the release number and channel used by the window, About panel, CLI, bundle display metadata, and ZIP filename. For each new distributed build, increment `CFBundleVersion` in `Resources/Info.plist`. The bundle's numeric marketing version is generated from the shared release identity during packaging.
 
 ## Build
 

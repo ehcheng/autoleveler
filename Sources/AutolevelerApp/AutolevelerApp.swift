@@ -16,6 +16,11 @@ struct AutolevelerApp: App {
                 .tint(Color(red: 0.18, green: 0.67, blue: 0.62))
         }
         .commands {
+            CommandGroup(replacing: .appInfo) {
+                Button("About Autoleveler") {
+                    NSApp.orderFrontStandardAboutPanel(options: [.applicationVersion: AppVersion.display])
+                }
+            }
             CommandGroup(replacing: .newItem) {
                 Button("Open…", action: model.openFiles)
                     .keyboardShortcut("o", modifiers: .command)
@@ -330,9 +335,15 @@ struct ContentView: View {
                 .font(.system(size: 26, weight: .semibold))
                 .foregroundStyle(.tint)
             VStack(alignment: .leading, spacing: 3) {
-                Text("Autoleveler")
-                    .font(.title2.weight(.semibold))
-                Text("Even dialogue. Quiet pauses.")
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text("Autoleveler")
+                        .font(.title2.weight(.semibold))
+                    Text(AppVersion.display)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                (Text("Drag and level! ").bold() +
+                 Text("Automatic dialogue leveling for audio and video.").italic())
                     .foregroundStyle(.secondary)
             }
             Spacer()
@@ -473,6 +484,13 @@ struct ContentView: View {
             Text("⌘↩ Start  ·  ⌘. Cancel")
                 .font(.caption)
                 .foregroundStyle(.tertiary)
+            Link(destination: URL(string: "https://echeng.com")!) {
+                Text("echeng.com").underline()
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .help("Visit Eric Cheng’s website")
+            .accessibilityLabel("echeng.com, Eric Cheng’s website")
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 12)

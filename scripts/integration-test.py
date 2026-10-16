@@ -154,7 +154,7 @@ def main():
     if not Path(cli).is_file():
         raise SystemExit(f"CLI not found: {cli}; build the debug CLI first")
     version = run([cli, "--version"])
-    if version.stdout.strip() != "Autoleveler 1.0.0":
+    if version.stdout.strip() != "Autoleveler 1.0.0 beta":
         raise AssertionError(f"unexpected CLI version: {version.stdout.strip()!r}")
     with tempfile.TemporaryDirectory(prefix="autoleveler-integration-") as temporary:
         root = Path(temporary)

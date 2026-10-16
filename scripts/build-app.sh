@@ -9,6 +9,10 @@ SCRATCH_ROOT="${SWIFT_SCRATCH_PATH:-$ROOT_DIR/.build}"
 GUI_SCRATCH_DIR="${SWIFT_GUI_SCRATCH_PATH:-$SCRATCH_ROOT/gui}"
 CLI_SCRATCH_DIR="${SWIFT_CLI_SCRATCH_PATH:-$SCRATCH_ROOT/cli}"
 CONFIGURATION="release"
+BUILD_SYSTEM_ARGS=()
+if [[ -n "${SWIFT_BUILD_SYSTEM:-}" ]]; then
+  BUILD_SYSTEM_ARGS=(--build-system "$SWIFT_BUILD_SYSTEM")
+fi
 SWIFT_MODULE_CACHE="${SWIFT_MODULE_CACHE:-/private/tmp/autoleveler-swift-cache}"
 
 die() {
@@ -38,25 +42,32 @@ export SWIFTPM_MODULECACHE_OVERRIDE="$SWIFT_MODULE_CACHE"
 swift build \
   -c "$CONFIGURATION" \
   --product AutolevelerApp \
-  --arch arm64 \
+  --arch arm64 "${BUILD_SYSTEM_ARGS[@]}" \
   --disable-sandbox \
   --scratch-path "$GUI_SCRATCH_DIR"
 
-GUI_BIN_PATH="$(swift build -c "$CONFIGURATION" --product AutolevelerApp --arch arm64 --disable-sandbox --scratch-path "$GUI_SCRATCH_DIR" --show-bin-path)"
+GUI_BIN_PATH="$(swift build -c "$CONFIGURATION" --product AutolevelerApp --arch arm64 "${BUILD_SYSTEM_ARGS[@]}" --disable-sandbox --scratch-path "$GUI_SCRATCH_DIR" --show-bin-path)"
 [[ -x "$GUI_BIN_PATH/AutolevelerApp" ]] || die "SwiftPM did not produce AutolevelerApp"
 
 swift build \
   -c "$CONFIGURATION" \
   --product autoleveler \
-  --arch arm64 \
+  --arch arm64 "${BUILD_SYSTEM_ARGS[@]}" \
   --disable-sandbox \
   --scratch-path "$CLI_SCRATCH_DIR"
 
-CLI_BIN_PATH="$(swift build -c "$CONFIGURATION" --product autoleveler --arch arm64 --disable-sandbox --scratch-path "$CLI_SCRATCH_DIR" --show-bin-path)"
+CLI_BIN_PATH="$(swift build -c "$CONFIGURATION" --product autoleveler --arch arm64 "${BUILD_SYSTEM_ARGS[@]}" --disable-sandbox --scratch-path "$CLI_SCRATCH_DIR" --show-bin-path)"
 [[ -x "$CLI_BIN_PATH/autoleveler" ]] || die "SwiftPM did not produce autoleveler"
+
+VERSION_DISPLAY="$("$CLI_BIN_PATH/autoleveler" --version)"
+VERSION_DISPLAY="${VERSION_DISPLAY#Autoleveler }"
+VERSION_NUMBER="${VERSION_DISPLAY%% *}"
+VERSION_SLUG="${VERSION_DISPLAY// /-}"
 
 mkdir -p "$APP_DIR/Contents/MacOS" "$APP_DIR/Contents/Resources"
 cp "$ROOT_DIR/Resources/Info.plist" "$APP_DIR/Contents/Info.plist"
+plutil -replace CFBundleShortVersionString -string "$VERSION_NUMBER" "$APP_DIR/Contents/Info.plist"
+plutil -insert AutolevelerDisplayVersion -string "$VERSION_DISPLAY" "$APP_DIR/Contents/Info.plist"
 cp "$GUI_BIN_PATH/AutolevelerApp" "$APP_DIR/Contents/MacOS/AutolevelerApp"
 cp "$CLI_BIN_PATH/autoleveler" "$APP_DIR/Contents/MacOS/autoleveler"
 chmod 755 "$APP_DIR/Contents/MacOS/AutolevelerApp" "$APP_DIR/Contents/MacOS/autoleveler"
@@ -94,7 +105,7 @@ done
 codesign --force --timestamp=none --sign - "$APP_DIR"
 codesign --verify --deep --strict "$APP_DIR"
 
-ZIP_PATH="$DIST_DIR/Autoleveler-macOS-arm64.zip"
+ZIP_PATH="$DIST_DIR/Autoleveler-${VERSION_SLUG}-macOS-arm64.zip"
 rm -f "$ZIP_PATH"
 ditto -c -k --keepParent "$APP_DIR" "$ZIP_PATH"
 

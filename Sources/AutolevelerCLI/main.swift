@@ -53,7 +53,7 @@ do {
         switch argument {
         case "--": positionalOnly = true
         case "--help", "-h": print(usage); exit(0)
-        case "--version": print("Autoleveler 1.0.0"); exit(0)
+        case "--version": print("Autoleveler \(AppVersion.display)"); exit(0)
         case "--format":
             let value = try takeValue(argument)
             guard let codec = AudioCodec(rawValue: value) else { throw AutolevelerError.message("Unknown format '\(value)'; use aac, mp3, or pcm.") }
