@@ -4,7 +4,7 @@ Drag and level! *Automatic dialogue leveling for audio and video.*
 
 A recording can be too quiet throughout, or change volume every time someone moves away from the microphone. Autoleveler brings up quiet speech and compresses louder passages, while keeping pauses close to their original level. Drop in a batch of audio or video files and process them on your Mac.
 
-I wanted the convenience of Levelator for video with uneven dialogue. Autoleveler uses speech detection to decide where amplification makes sense. Video passes through without re-encoding, so there's no generation loss in the picture.
+I wrote Autoleveler because Levelator didn't work for me when I tried it on macOS Tahoe 26.2. I wanted the same convenience for video with uneven dialogue. Autoleveler uses speech detection to decide where amplification makes sense. Video passes through without re-encoding, so there's no generation loss in the picture.
 
 Requires an Apple silicon Mac running macOS 14 or later. FFmpeg and FFprobe are included; you don't need Homebrew or Python to use the app. Processing stays on your Mac, with no uploads or account required.
 
