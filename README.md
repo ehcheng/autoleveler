@@ -8,6 +8,8 @@ I wrote Autoleveler because Levelator didn't work for me when I tried it on macO
 
 Requires an Apple silicon Mac running macOS 14 or later. FFmpeg and FFprobe are included; you don't need Homebrew or Python to use the app. Processing stays on your Mac, with no uploads or account required.
 
+![Autoleveler processing a batch of videos, with queue progress and output settings.](screenshots/autoleveler.png)
+
 ## Install and use
 
 Download the ZIP from [GitHub Releases](https://github.com/ehcheng/autoleveler/releases), unzip it, and move Autoleveler to Applications.
