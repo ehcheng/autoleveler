@@ -13,6 +13,7 @@ let package = Package(
         .target(name: "AutolevelerCore"),
         .executableTarget(name: "AutolevelerApp", dependencies: ["AutolevelerCore"]),
         .executableTarget(name: "AutolevelerCLI", dependencies: ["AutolevelerCore"]),
-        .testTarget(name: "AutolevelerCoreTests", dependencies: ["AutolevelerCore"])
+        .testTarget(name: "AutolevelerCoreTests", dependencies: ["AutolevelerCore"]),
+        .testTarget(name: "AutolevelerAppTests", dependencies: ["AutolevelerApp"])
     ]
 )

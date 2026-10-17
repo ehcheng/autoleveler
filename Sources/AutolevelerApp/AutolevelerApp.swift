@@ -106,6 +106,15 @@ final class AppModel: ObservableObject {
     private var activeCancellation: CancellationToken?
     private var cancellationRequested = false
     private var pendingTermination = false
+    typealias ProcessHandler = @Sendable (URL, ProcessingOptions, CancellationToken,
+                                          @escaping @Sendable (ProcessingProgress) -> Void) throws -> ProcessingResult
+    private let processHandler: ProcessHandler
+
+    init(processHandler: @escaping ProcessHandler = { input, options, cancellation, progress in
+        try MediaProcessor().process(input: input, options: options, cancellation: cancellation, progress: progress)
+    }) {
+        self.processHandler = processHandler
+    }
 
     var canStart: Bool {
         !isProcessing && items.contains { $0.state == .waiting }
@@ -227,10 +236,8 @@ final class AppModel: ObservableObject {
     }
 
     private func runQueue() async {
-        let waitingIDs = items.filter { $0.state == .waiting }.map(\.id)
-
-        for id in waitingIDs {
-            guard !Task.isCancelled, let index = items.firstIndex(where: { $0.id == id }) else { break }
+        while !Task.isCancelled, let id = items.first(where: { $0.state == .waiting })?.id,
+              let index = items.firstIndex(where: { $0.id == id }) {
 
             items[index].state = .processing
             items[index].progress = 0
@@ -254,9 +261,8 @@ final class AppModel: ObservableObject {
             }
 
             do {
-                let result = try await Task.detached(priority: .userInitiated) {
-                    let processor = try MediaProcessor()
-                    return try processor.process(input: input, options: options, cancellation: token, progress: progressSink)
+                let result = try await Task.detached(priority: .userInitiated) { [processHandler] in
+                    try processHandler(input, options, token, progressSink)
                 }.value
 
                 guard let completedIndex = items.firstIndex(where: { $0.id == id }) else { continue }

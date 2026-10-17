@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DIST_DIR="${APP_DIST_DIR:-$ROOT_DIR/dist}"
+MEDIA_TOOLS_DIST_DIR="${MEDIA_TOOLS_DIST_DIR:-$DIST_DIR/media-tools}"
 APP_NAME="Autoleveler.app"
 APP_DIR="$DIST_DIR/$APP_NAME"
 SCRATCH_ROOT="${SWIFT_SCRATCH_PATH:-$ROOT_DIR/.build}"
@@ -83,8 +84,8 @@ for license in LICENSE LICENSE.md; do
   fi
 done
 
-"$ROOT_DIR/scripts/build-media-tools.sh"
-python3 "$ROOT_DIR/scripts/bundle-tools.py" "$APP_DIR"
+MEDIA_TOOLS_DIST_DIR="$MEDIA_TOOLS_DIST_DIR" "$ROOT_DIR/scripts/build-media-tools.sh"
+python3 "$ROOT_DIR/scripts/bundle-tools.py" "$APP_DIR" --source "$MEDIA_TOOLS_DIST_DIR"
 
 for binary in "$APP_DIR/Contents/MacOS/AutolevelerApp" "$APP_DIR/Contents/MacOS/autoleveler" \
   "$APP_DIR/Contents/Helpers/ffmpeg" "$APP_DIR/Contents/Helpers/ffprobe"; do

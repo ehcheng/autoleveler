@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.0.1 — 2026-10-16
+
+- Detect speech on every channel; preserve channel balance and limit boosts when another channel is already loud.
+- Convert MP4 text subtitles for MKV exports and check subtitle compatibility before processing audio.
+- Include files added while a batch is processing.
+- Read only the tail of processing error logs to bound memory use.
+- Require bundled processing tools in packaged apps.
+- Respect custom media-tool output paths and rebuild cached helpers when build inputs change.
+- Add regression tests for subtitle exports, multichannel speech, queue updates, helper discovery, error logs, and build caching.
+
 ## 1.0.0 — 2026-10-16
 
 First stable release, build 2.

@@ -38,6 +38,10 @@ public struct ProcessingProgress: Sendable {
 public struct ProcessingResult: Sendable {
     public let output: URL
     public let speechDetected: Bool
+    public init(output: URL, speechDetected: Bool) {
+        self.output = output
+        self.speechDetected = speechDetected
+    }
 }
 
 public enum AutolevelerError: LocalizedError {

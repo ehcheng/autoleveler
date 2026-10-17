@@ -30,9 +30,10 @@ def probe(ffprobe, path):
     return json.loads(result.stdout)
 
 
-def rms(ffmpeg, source, start, duration):
+def rms(ffmpeg, source, start, duration, channel=None):
+    channel_filter = f"pan=mono|c0=c{channel}," if channel is not None else ""
     result = run([ffmpeg, "-v", "info", "-ss", str(start), "-t", str(duration), "-i", str(source),
-                  "-af", "volumedetect", "-f", "null", "-"])
+                  "-af", channel_filter + "volumedetect", "-f", "null", "-"])
     match = re.search(r"mean_volume:\s*(-?[0-9.]+) dB", result.stderr)
     if "mean_volume: -inf dB" in result.stderr:
         return float("-inf")
@@ -136,6 +137,17 @@ def check_multitrack_output(ffprobe, output, expected_video_hash, ffmpeg, input_
         raise AssertionError("video stream changed in multitrack output")
 
 
+def check_packaged_helpers(cli):
+    cli_path = Path(cli).resolve()
+    if cli_path.parent.name != "MacOS" or cli_path.parent.parent.name != "Contents":
+        return
+    helpers = cli_path.parent.parent / "Helpers"
+    missing = [str(path) for path in (helpers / "ffmpeg", helpers / "ffprobe")
+               if not path.is_file() or not os.access(path, os.X_OK)]
+    if missing:
+        raise AssertionError(f"packaged CLI is missing executable media helpers: {missing}")
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--quick", action="store_true", help="skip the cancellation stress case")
@@ -153,8 +165,9 @@ def main():
         cli = str(cli_path)
     if not Path(cli).is_file():
         raise SystemExit(f"CLI not found: {cli}; build the debug CLI first")
+    check_packaged_helpers(cli)
     version = run([cli, "--version"])
-    if version.stdout.strip() != "Autoleveler 1.0.0":
+    if version.stdout.strip() != "Autoleveler 1.0.1":
         raise AssertionError(f"unexpected CLI version: {version.stdout.strip()!r}")
     with tempfile.TemporaryDirectory(prefix="autoleveler-integration-") as temporary:
         root = Path(temporary)
@@ -187,6 +200,23 @@ def main():
             raise AssertionError(f"pause noise rose by more than 2 dB: {original_noise} -> {noise}")
         assert_pcm_silence(outputs["pcm"], start=5.5, duration=1)
 
+        stereo_input = root / "stereo-dialogue.wav"
+        run([ffmpeg, "-v", "error", "-i", str(root / "voice.aiff"),
+             "-f", "lavfi", "-i", "anoisesrc=color=white:amplitude=0.2:sample_rate=48000:seed=42",
+             "-filter_complex", "[0:a]volume=0.18,pan=mono|c0=c0[speech];[1:a][speech]amerge=inputs=2[a]",
+             "-map", "[a]", "-t", "5", "-c:a", "pcm_s16le", str(stereo_input)])
+        result = run([cli, "--format", "pcm", "--audio", "-o", str(root), str(stereo_input)])
+        stereo_output = Path(result.stdout.strip().splitlines()[-1])
+        if "No confident speech detected" in result.stderr:
+            raise AssertionError("quiet right-channel speech was missed beside louder left-channel noise")
+        right_gain = rms(ffmpeg, stereo_output, 0.4, 2, channel=1) - rms(ffmpeg, stereo_input, 0.4, 2, channel=1)
+        left_gain = rms(ffmpeg, stereo_output, 0.4, 2, channel=0) - rms(ffmpeg, stereo_input, 0.4, 2, channel=0)
+        if right_gain < 2 or left_gain > 8:
+            raise AssertionError(f"unsafe or ineffective linked stereo gain: speech {right_gain:.1f}, noise {left_gain:.1f} dB")
+        if probe(ffprobe, stereo_output)["streams"][0].get("channels") != 2:
+            raise AssertionError("stereo export changed the channel count")
+        print(f"stereo speech gain {right_gain:.1f} dB; other-channel gain {left_gain:.1f} dB")
+
         second = run([cli, "--format", "aac", "--audio", "-o", str(root), str(fixture)])
         second_output = Path(second.stdout.strip().splitlines()[-1])
         if second_output == outputs["aac"] or not second_output.exists():
@@ -211,6 +241,22 @@ def main():
         check_output(ffmpeg, ffprobe, video_output, video=True, input_probe=video_probe)
         if decoded_video_hash(ffmpeg, video_output) != before_hash:
             raise AssertionError("video stream changed while processing audio")
+
+        subtitle_file = root / "subtitle.srt"
+        subtitle_file.write_text("1\n00:00:00,000 --> 00:00:02,000\nSpeech fixture\n", encoding="utf-8")
+        subtitle_input = root / "fixture-subtitle.mp4"
+        run([ffmpeg, "-v", "error", "-i", str(video_input), "-i", str(subtitle_file),
+             "-map", "0", "-map", "1:0", "-c", "copy", "-c:s", "mov_text",
+             "-metadata:s:s:0", "language=eng", str(subtitle_input)])
+        subtitle_video_hash = decoded_video_hash(ffmpeg, subtitle_input)
+        result = run([cli, "--format", "mp3", "--video", "-o", str(root), str(subtitle_input)])
+        subtitle_output = Path(result.stdout.strip().splitlines()[-1])
+        subtitle_info = probe(ffprobe, subtitle_output)
+        subtitles = [s for s in subtitle_info["streams"] if s.get("codec_type") == "subtitle"]
+        if len(subtitles) != 1 or subtitles[0].get("codec_name") != "subrip":
+            raise AssertionError(f"MP3 MKV output did not convert mov_text subtitle: {subtitles}")
+        if decoded_video_hash(ffmpeg, subtitle_output) != subtitle_video_hash:
+            raise AssertionError("video stream changed while converting mov_text subtitle")
 
         short_audio = root / "short.wav"
         run([ffmpeg, "-v", "error", "-i", str(fixture), "-t", "4", "-c:a", "pcm_s16le", str(short_audio)])

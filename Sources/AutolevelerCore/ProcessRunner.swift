@@ -35,23 +35,47 @@ public final class CancellationToken: @unchecked Sendable {
 struct MediaTools {
     let ffmpeg: URL
     let ffprobe: URL
-    init() throws {
+    init(executable: URL = URL(fileURLWithPath: CommandLine.arguments[0]),
+         bundleURL: URL = Bundle.main.bundleURL,
+         overrideDirectory: URL? = ProcessInfo.processInfo.environment["AUTOLEVELER_TOOLS"].map { URL(fileURLWithPath: $0) }) throws {
         let manager = FileManager.default
-        let executable = URL(fileURLWithPath: CommandLine.arguments[0]).resolvingSymlinksInPath()
-        var directories: [URL] = []
-        if let override = ProcessInfo.processInfo.environment["AUTOLEVELER_TOOLS"] {
-            directories.append(URL(fileURLWithPath: override))
+        let executable = executable.resolvingSymlinksInPath()
+        let contents = executable.deletingLastPathComponent().deletingLastPathComponent()
+        let executableApp = contents.deletingLastPathComponent()
+        let app: URL?
+        if bundleURL.pathExtension == "app" {
+            app = bundleURL
+        } else if executable.deletingLastPathComponent().lastPathComponent == "MacOS",
+                  contents.lastPathComponent == "Contents", executableApp.pathExtension == "app" {
+            app = executableApp
+        } else {
+            app = nil
         }
-        directories += [Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers"),
-                        executable.deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("Helpers"),
-                        executable.deletingLastPathComponent(),
-                        URL(fileURLWithPath: manager.currentDirectoryPath).appendingPathComponent("dist/media-tools"),
-                        URL(fileURLWithPath: "/opt/homebrew/bin"), URL(fileURLWithPath: "/usr/local/bin")]
-        guard let directory = directories.first(where: {
-            manager.isExecutableFile(atPath: $0.appendingPathComponent("ffmpeg").path) &&
-            manager.isExecutableFile(atPath: $0.appendingPathComponent("ffprobe").path)
-        }) else { throw AutolevelerError.message("Media tools are missing. Reinstall Autoleveler or set AUTOLEVELER_TOOLS to a folder containing ffmpeg and ffprobe.") }
-        ffmpeg = directory.appendingPathComponent("ffmpeg"); ffprobe = directory.appendingPathComponent("ffprobe")
+        let directories: [URL]
+        if let app {
+            // Packaged apps must use their own tools, even when a development override is set.
+            directories = [app.appendingPathComponent("Contents/Helpers")]
+        } else if let overrideDirectory {
+            directories = [overrideDirectory]
+        } else {
+            directories = [executable.deletingLastPathComponent(),
+                           URL(fileURLWithPath: manager.currentDirectoryPath).appendingPathComponent("dist/media-tools"),
+                           URL(fileURLWithPath: "/opt/homebrew/bin"), URL(fileURLWithPath: "/usr/local/bin")]
+        }
+        guard let directory = directories.first(where: { directory in
+            ["ffmpeg", "ffprobe"].allSatisfy { name in
+                let path = directory.appendingPathComponent(name).path
+                var isDirectory: ObjCBool = false
+                return manager.fileExists(atPath: path, isDirectory: &isDirectory) &&
+                    !isDirectory.boolValue && manager.isExecutableFile(atPath: path)
+            }
+        }) else {
+            throw AutolevelerError.message(app == nil
+                ? "Media tools are missing. Set AUTOLEVELER_TOOLS to a folder containing ffmpeg and ffprobe."
+                : "Bundled media tools are missing. Reinstall Autoleveler.")
+        }
+        ffmpeg = directory.appendingPathComponent("ffmpeg")
+        ffprobe = directory.appendingPathComponent("ffprobe")
     }
 }
 
@@ -86,10 +110,22 @@ struct ProcessRunner {
         child.waitUntilExit()
         try cancellation.check()
         guard child.terminationStatus == 0 else {
-            let diagnostic = (try? String(contentsOf: log, encoding: .utf8)) ?? ""
-            throw AutolevelerError.message(String(diagnostic.suffix(3500)).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                ? "Media processing failed (exit \(child.terminationStatus))." : String(diagnostic.suffix(3500)))
+            let diagnostic = (try? diagnosticTail(at: log)) ?? ""
+            throw AutolevelerError.message(diagnostic.isEmpty
+                ? "Media processing failed (exit \(child.terminationStatus))." : diagnostic)
         }
         return captured
     }
+
+    static func diagnosticTail(at url: URL) throws -> String {
+        let handle = try FileHandle(forReadingFrom: url)
+        defer { try? handle.close() }
+        let end = try handle.seekToEnd()
+        let limit: UInt64 = 16_384
+        try handle.seek(toOffset: end > limit ? end - limit : 0)
+        let bytes = try handle.read(upToCount: Int(limit)) ?? Data()
+        return String(String(decoding: bytes, as: UTF8.self).suffix(3500))
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
 }

@@ -42,7 +42,9 @@ Autoleveler uses its own processing algorithm. It doesn't reproduce Levelator's 
 | Video + PCM | MOV for compatible source codecs; otherwise MKV |
 | Video + MP3 | MKV |
 
-Processed audio is 48 kHz. In video exports, Autoleveler processes separate audio tracks and preserves their channel counts and timing. It also retains available subtitles, chapters, and metadata; MKV exports retain attachments. Data and timecode streams are omitted. Audio-only exports use the default audio track, or the first track if none is marked default. Embedded album art doesn't count as video.
+Processed audio is 48 kHz. In video exports, Autoleveler processes separate audio tracks and preserves their channel counts and timing. It also retains available subtitles, chapters, and metadata; MKV exports retain attachments. MP4 text subtitles are converted to SubRip for MKV output, which can change their styling. Unsupported subtitle combinations are reported before audio processing starts.
+
+Data and timecode streams are omitted. Audio-only exports use the default audio track, or the first track if none is marked default. Embedded album art doesn't count as video.
 
 MP3 supports mono or stereo. Autoleveler rejects multichannel MP3 requests rather than downmixing them. Input support depends on FFmpeg's demuxers and decoders. Damaged, encrypted, DRM-protected, or unsupported files produce an error. Networking is disabled in the bundled FFmpeg tools.
 
@@ -63,7 +65,7 @@ Exit codes are `0` for success, `1` for file failures, `2` for invalid arguments
 
 ## How leveling works
 
-Apple's Sound Analysis classifier identifies likely speech locally, without transcription or a downloaded model (Apple, n.d.). Autoleveler measures channel energy in 50 ms blocks and estimates the background level. It then calculates a smooth gain curve around speech, targeting approximately −20 dBFS RMS with a maximum boost of 24 dB. Gain returns toward unity during pauses. Channels share a gain curve to preserve their relative balance.
+Apple's Sound Analysis classifier identifies likely speech locally, without transcription or a downloaded model (Apple, n.d.). Autoleveler measures channel energy in 50 ms blocks and estimates the background level. It then calculates a smooth gain curve around speech, targeting approximately −20 dBFS RMS with a maximum boost of 24 dB. Gain returns toward unity during pauses. Speech detection checks each channel. Channels share a gain curve to preserve their relative balance, with boosts capped when another channel is already loud.
 
 After leveling, FFmpeg applies gentle compression and an oversampled limiter with 2 dB of sample-peak headroom before encoding (FFmpeg, n.d.). Autoleveler compensates for the limiter's lookahead delay to preserve audio timing.
 
@@ -84,20 +86,21 @@ To notarize a signed build, store your Apple credentials with `xcrun notarytool 
 ```sh
 ./scripts/notarize-release.sh \
   dist/Autoleveler.app \
-  dist/Autoleveler-1.0.0-macOS-arm64.zip \
+  dist/Autoleveler-1.0.1-macOS-arm64.zip \
   YOUR_KEYCHAIN_PROFILE
 ```
 
 The script submits the app to Apple, saves the notarization log, staples the ticket, checks Gatekeeper acceptance, and creates the final ZIP and SHA-256 checksum. It stops if notarization fails.
 
-For development, `AUTOLEVELER_TOOLS=/path/to/tools` selects a folder containing both `ffmpeg` and `ffprobe`. An unpackaged build can also use installed tools.
+Unpackaged development builds can use installed tools, or `AUTOLEVELER_TOOLS=/path/to/tools` to select a folder containing both `ffmpeg` and `ffprobe`. Packaged apps require their bundled helpers.
 
 ```sh
 swift test
+./scripts/test-build-media-tools.sh
 python3 scripts/integration-test.py --cli "$(swift build --show-bin-path)/autoleveler"
 ```
 
-The integration tests use macOS `say` for a speech fixture and an FFmpeg installation with `libx264` for video. You can supply a recording with `--speech-fixture /path/to/speech.wav`. Tests cover speech leveling, noise and silence, encoded peaks, export formats, copied video, track timing, output collisions, invalid inputs, and cancellation. To test a packaged app, pass its CLI path and set `AUTOLEVELER_TOOLS` to its `Contents/Helpers` folder.
+The integration tests use macOS `say` for a speech fixture and an FFmpeg installation with `libx264` for video. You can supply a recording with `--speech-fixture /path/to/speech.wav`. Tests cover speech leveling, noise and silence, encoded peaks, export formats, copied video, track timing, output collisions, invalid inputs, and cancellation. To test a packaged app, pass its CLI path. The integration test checks that its bundled helpers are present.
 
 Runtime testing during development was on macOS 26. The deployment target is macOS 14; runtime behavior on macOS 14 hasn't been verified.
 

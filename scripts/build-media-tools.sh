@@ -26,6 +26,9 @@ PREFIX="$BUILD_ROOT/prefix"
 FFMPEG_PREFIX="$BUILD_ROOT/ffmpeg-prefix-${FFMPEG_VERSION}"
 THIRD_PARTY_DIR="$DIST_DIR/third-party-sources"
 
+COMMON_CFLAGS="-arch arm64 -mmacosx-version-min=${MACOS_MIN} -O2"
+COMMON_LDFLAGS="-arch arm64 -mmacosx-version-min=${MACOS_MIN}"
+
 die() {
   printf 'build-media-tools: %s\n' "$*" >&2
   exit 1
@@ -47,9 +50,24 @@ download_and_verify() {
 
 extract_once() {
   local archive="$1" directory="$2" expected_directory="$3"
-  if [[ ! -d "$directory/$expected_directory" ]]; then
+  local source="$directory/$expected_directory"
+  local marker="$source/.autoleveler-archive-sha256"
+  local archive_sha
+  archive_sha="$(shasum -a 256 "$DOWNLOAD_DIR/$archive" | awk '{print $1}')"
+  if [[ ! -d "$source" || ! -f "$marker" || "$(<"$marker")" != "$archive_sha" ]]; then
+    rm -rf "$source"
     tar -xf "$DOWNLOAD_DIR/$archive" -C "$directory"
+    printf '%s\n' "$archive_sha" > "$marker"
   fi
+}
+
+fingerprint() {
+  printf '%s\0' "$@" | shasum -a 256 | awk '{print $1}'
+}
+
+cache_matches() {
+  local path="$1" expected="$2"
+  [[ -f "$path" ]] && [[ "$(<"$path")" == "$expected" ]]
 }
 
 verify_binary() {
@@ -85,14 +103,75 @@ require_command clang
 require_command otool
 require_command file
 
+COMPILER_FINGERPRINT="$(clang --version | sed -n '1p')"
+
+LAME_CONFIGURE_ARGS=(
+  --prefix="$PREFIX"
+  --host=arm-apple-darwin
+  --disable-shared
+  --enable-static
+  --disable-frontend
+)
+FFMPEG_CONFIGURE_ARGS=(
+  --prefix="$FFMPEG_PREFIX"
+  --arch=arm64
+  --target-os=darwin
+  --cc=clang
+  --disable-autodetect
+  --disable-debug
+  --disable-doc
+  --disable-htmlpages
+  --disable-manpages
+  --disable-podpages
+  --disable-txtpages
+  --disable-network
+  --disable-ffplay
+  --disable-avdevice
+  --disable-shared
+  --enable-static
+  --enable-libmp3lame
+  --enable-encoder=aac
+  --enable-decoder=aac
+  --extra-cflags="-I$PREFIX/include $COMMON_CFLAGS"
+  --extra-ldflags="-L$PREFIX/lib $COMMON_LDFLAGS"
+)
+
 mkdir -p "$DOWNLOAD_DIR" "$SOURCE_DIR" "$PREFIX" "$FFMPEG_PREFIX" "$DIST_DIR" "$THIRD_PARTY_DIR"
 download_and_verify "$FFMPEG_URL" "$FFMPEG_ARCHIVE" "$FFMPEG_SHA256"
 download_and_verify "$LAME_URL" "$LAME_ARCHIVE" "$LAME_SHA256"
+
+LAME_FINGERPRINT="$(fingerprint \
+  "component=lame" \
+  "version=$LAME_VERSION" \
+  "archive-sha256=$LAME_SHA256" \
+  "target=$TARGET" \
+  "cflags=$COMMON_CFLAGS" \
+  "cppflags=-I$PREFIX/include" \
+  "ldflags=$COMMON_LDFLAGS" \
+  "compiler=$COMPILER_FINGERPRINT" "${LAME_CONFIGURE_ARGS[@]}")"
+FFMPEG_FINGERPRINT="$(fingerprint \
+  "component=ffmpeg" \
+  "version=$FFMPEG_VERSION" \
+  "archive-sha256=$FFMPEG_SHA256" \
+  "lame-archive-sha256=$LAME_SHA256" \
+  "lame-fingerprint=$LAME_FINGERPRINT" \
+  "target=$TARGET" \
+  "cflags=$COMMON_CFLAGS -I$PREFIX/include" \
+  "ldflags=$COMMON_LDFLAGS -L$PREFIX/lib" \
+  "compiler=$COMPILER_FINGERPRINT" "${FFMPEG_CONFIGURE_ARGS[@]}")"
+
+if [[ ! -f "$PREFIX/lib/libmp3lame.a" ]] || ! cache_matches "$PREFIX/.autoleveler-build-fingerprint" "$LAME_FINGERPRINT"; then
+  rm -rf "$PREFIX"
+  mkdir -p "$PREFIX"
+  rm -rf "$SOURCE_DIR/lame-${LAME_VERSION}"
+fi
+if [[ ! -x "$FFMPEG_PREFIX/bin/ffmpeg" || ! -x "$FFMPEG_PREFIX/bin/ffprobe" ]] || ! cache_matches "$FFMPEG_PREFIX/.autoleveler-build-fingerprint" "$FFMPEG_FINGERPRINT"; then
+  rm -rf "$FFMPEG_PREFIX"
+  mkdir -p "$FFMPEG_PREFIX"
+  rm -rf "$SOURCE_DIR/ffmpeg-${FFMPEG_VERSION}"
+fi
 extract_once "$LAME_ARCHIVE" "$SOURCE_DIR" "lame-${LAME_VERSION}"
 extract_once "$FFMPEG_ARCHIVE" "$SOURCE_DIR" "ffmpeg-${FFMPEG_VERSION}"
-
-COMMON_CFLAGS="-arch arm64 -mmacosx-version-min=${MACOS_MIN} -O2"
-COMMON_LDFLAGS="-arch arm64 -mmacosx-version-min=${MACOS_MIN}"
 
 if [[ ! -f "$PREFIX/lib/libmp3lame.a" ]]; then
   (
@@ -101,15 +180,11 @@ if [[ ! -f "$PREFIX/lib/libmp3lame.a" ]]; then
     CFLAGS="$COMMON_CFLAGS" \
     CPPFLAGS="-I$PREFIX/include" \
     LDFLAGS="$COMMON_LDFLAGS" \
-      ./configure \
-        --prefix="$PREFIX" \
-        --host=arm-apple-darwin \
-        --disable-shared \
-        --enable-static \
-        --disable-frontend
+      ./configure "${LAME_CONFIGURE_ARGS[@]}"
     make -j"$JOBS"
     make install
   )
+  printf '%s\n' "$LAME_FINGERPRINT" > "$PREFIX/.autoleveler-build-fingerprint"
 fi
 
 if [[ ! -x "$FFMPEG_PREFIX/bin/ffmpeg" || ! -x "$FFMPEG_PREFIX/bin/ffprobe" ]]; then
@@ -119,31 +194,11 @@ if [[ ! -x "$FFMPEG_PREFIX/bin/ffmpeg" || ! -x "$FFMPEG_PREFIX/bin/ffprobe" ]]; 
     PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig" \
     CFLAGS="$COMMON_CFLAGS -I$PREFIX/include" \
     LDFLAGS="$COMMON_LDFLAGS -L$PREFIX/lib" \
-      ./configure \
-        --prefix="$FFMPEG_PREFIX" \
-        --arch=arm64 \
-        --target-os=darwin \
-        --cc=clang \
-        --disable-autodetect \
-        --disable-debug \
-        --disable-doc \
-        --disable-htmlpages \
-        --disable-manpages \
-        --disable-podpages \
-        --disable-txtpages \
-        --disable-network \
-        --disable-ffplay \
-        --disable-avdevice \
-        --disable-shared \
-        --enable-static \
-        --enable-libmp3lame \
-        --enable-encoder=aac \
-        --enable-decoder=aac \
-        --extra-cflags="-I$PREFIX/include $COMMON_CFLAGS" \
-        --extra-ldflags="-L$PREFIX/lib $COMMON_LDFLAGS"
+      ./configure "${FFMPEG_CONFIGURE_ARGS[@]}"
     make -j"$JOBS"
     make install
   )
+  printf '%s\n' "$FFMPEG_FINGERPRINT" > "$FFMPEG_PREFIX/.autoleveler-build-fingerprint"
 fi
 
 rm -f "$DIST_DIR/ffmpeg" "$DIST_DIR/ffprobe"

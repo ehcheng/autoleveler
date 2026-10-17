@@ -41,28 +41,53 @@ struct GainPlan {
     static let hop = 0.05
 
     static func make(energy: [EnergyFrame], speech: [SpeechWindow]) -> GainPlan {
-        guard !energy.isEmpty else { return GainPlan(decibels: [], speechDetected: false) }
-        var voiced = [Bool](repeating: false, count: energy.count)
-        for window in speech where window.confidence >= 0.35 {
-            let lower = max(0, Int((window.start - 0.1) / hop))
-            let upper = min(energy.count, Int(ceil((window.end + 0.1) / hop)))
-            if upper > lower { for index in lower..<upper { voiced[index] = true } }
+        make(channelEnergy: [energy], channelSpeech: [speech])
+    }
+
+    static func make(channelEnergy: [[EnergyFrame]], channelSpeech: [[SpeechWindow]]) -> GainPlan {
+        guard let first = channelEnergy.first, !first.isEmpty else {
+            return GainPlan(decibels: [], speechDetected: false)
         }
-        let noise = energy.indices.filter { !voiced[$0] && energy[$0].rms > 0.000_001 }
-            .map { 20 * log10(energy[$0].rms) }.sorted()
-        let noiseFloor = noise.isEmpty ? -80 : noise[noise.count / 5]
-        let minimumSpeechDB = max(-75, min(-35, noiseFloor + 6))
-        var desired = [Double](repeating: 0, count: energy.count)
-        var detected = false
-        for index in energy.indices where voiced[index] && 20 * log10(max(energy[index].rms, 1e-12)) > minimumSpeechDB {
-            let lower = max(0, index - 5), upper = min(energy.count - 1, index + 5)
-            var power = 0.0, count = 0.0
-            for neighbour in lower...upper where voiced[neighbour] && energy[neighbour].rms > pow(10, minimumSpeechDB / 20) {
-                power += energy[neighbour].rms * energy[neighbour].rms; count += 1
+        precondition(channelEnergy.count == channelSpeech.count && channelEnergy.allSatisfy { $0.count == first.count })
+        var voiced = [[Bool]](repeating: [Bool](repeating: false, count: first.count), count: channelEnergy.count)
+        var minimumSpeechDB = [Double]()
+        for channel in channelEnergy.indices {
+            for window in channelSpeech[channel] where window.confidence >= 0.35 {
+                let lower = max(0, Int((window.start - 0.1) / hop))
+                let upper = min(first.count, Int(ceil((window.end + 0.1) / hop)))
+                if upper > lower { for index in lower..<upper { voiced[channel][index] = true } }
             }
-            guard count > 0 else { continue }
-            let speechDB = 10 * log10(max(power / count, 1e-12))
-            desired[index] = min(24, max(-18, -20 - speechDB))
+            let noise = first.indices.filter { !voiced[channel][$0] && channelEnergy[channel][$0].rms > 0.000_001 }
+                .map { 20 * log10(channelEnergy[channel][$0].rms) }.sorted()
+            let noiseFloor = noise.isEmpty ? -80 : noise[noise.count / 5]
+            minimumSpeechDB.append(max(-75, min(-35, noiseFloor + 6)))
+        }
+        var desired = [Double](repeating: 0, count: first.count)
+        var detected = false
+        for index in first.indices {
+            var speechDB = -Double.infinity
+            for channel in channelEnergy.indices where voiced[channel][index] {
+                let energy = channelEnergy[channel]
+                let threshold = minimumSpeechDB[channel]
+                guard 20 * log10(max(energy[index].rms, 1e-12)) > threshold else { continue }
+                let lower = max(0, index - 5), upper = min(first.count - 1, index + 5)
+                var power = 0.0, count = 0.0
+                for neighbour in lower...upper where voiced[channel][neighbour] && energy[neighbour].rms > pow(10, threshold / 20) {
+                    power += energy[neighbour].rms * energy[neighbour].rms; count += 1
+                }
+                if count > 0 { speechDB = max(speechDB, 10 * log10(max(power / count, 1e-12))) }
+            }
+            guard speechDB.isFinite else { continue }
+            var gain = min(24, max(-18, -20 - speechDB))
+            if gain > 0 {
+                // One gain curve preserves channel balance. Keep unrelated channels below
+                // a safe ceiling rather than boosting loud ambience with quiet speech.
+                for channel in channelEnergy.indices where !voiced[channel][index] {
+                    let rms = channelEnergy[channel][index].rms
+                    if rms > 0 { gain = min(gain, max(0, -12 - 20 * log10(rms))) }
+                }
+            }
+            desired[index] = gain
             detected = true
         }
         // Smooth in dB; return to unity through pauses instead of raising the noise floor.
@@ -75,7 +100,24 @@ struct GainPlan {
             }
             return sum / weights
         }
-        return GainPlan(decibels: smoothed, speechDetected: detected)
+        // Each render block interpolates this gain with the next one. Bound both
+        // endpoints against the current and preceding blocks' energy.
+        let bounded = smoothed.indices.map { index -> Double in
+            var gain = smoothed[index]
+            if gain > 0 {
+                for frame in max(0, index - 1)...index {
+                    for channel in channelEnergy.indices {
+                        let energy = channelEnergy[channel][frame]
+                        if energy.peak > 0 { gain = min(gain, max(0, 20 * log10(0.98 / energy.peak))) }
+                        if !voiced[channel][frame] && energy.rms > 0 {
+                            gain = min(gain, max(0, -12 - 20 * log10(energy.rms)))
+                        }
+                    }
+                }
+            }
+            return gain
+        }
+        return GainPlan(decibels: bounded, speechDetected: detected)
     }
 }
 
@@ -91,40 +133,44 @@ struct SpeechLeveler {
               let mono = AVAudioPCMBuffer(pcmFormat: monoFormat, frameCapacity: hop) else {
             throw AutolevelerError.message("Could not allocate an audio buffer.")
         }
-        let analyzer = SNAudioStreamAnalyzer(format: monoFormat)
-        let request = try SNClassifySoundRequest(classifierIdentifier: .version1)
-        request.windowDuration = CMTime(seconds: 0.5, preferredTimescale: 48_000)
-        request.overlapFactor = 0.5
-        let observer = SpeechObserver()
-        try analyzer.add(request, withObserver: observer)
-        defer { analyzer.removeAllRequests() }
-        var energy: [EnergyFrame] = []
+        let analyzers: [SNAudioStreamAnalyzer] = (0..<Int(format.channelCount)).map { _ in
+            SNAudioStreamAnalyzer(format: monoFormat)
+        }
+        let observers = analyzers.map { _ in SpeechObserver() }
+        for channel in analyzers.indices {
+            let request = try SNClassifySoundRequest(classifierIdentifier: .version1)
+            request.windowDuration = CMTime(seconds: 0.5, preferredTimescale: 48_000)
+            request.overlapFactor = 0.5
+            try analyzers[channel].add(request, withObserver: observers[channel])
+        }
+        defer { analyzers.forEach { $0.removeAllRequests() } }
+        var channelEnergy = [[EnergyFrame]](repeating: [], count: analyzers.count)
         while file.framePosition < file.length {
             try cancellation.check()
             let position = file.framePosition
             try file.read(into: buffer, frameCount: hop)
             let count = Int(buffer.frameLength)
             guard count > 0, let channels = buffer.floatChannelData, let monoData = mono.floatChannelData else { break }
-            var largestPower = 0.0, peak = 0.0, selectedChannel = 0
-            for channel in 0..<Int(format.channelCount) {
-                var power = 0.0
+            mono.frameLength = buffer.frameLength
+            for channel in analyzers.indices {
+                var power = 0.0, peak = 0.0
                 for sample in 0..<count {
                     let value = Double(channels[channel][sample])
                     guard value.isFinite else { throw AutolevelerError.message("Input contains invalid audio samples.") }
                     power += value * value; peak = max(peak, abs(value))
                 }
-                if power > largestPower { largestPower = power; selectedChannel = channel }
+                channelEnergy[channel].append(EnergyFrame(rms: sqrt(power / Double(count)), peak: peak))
+                monoData[0].update(from: channels[channel], count: count)
+                analyzers[channel].analyze(mono, atAudioFramePosition: position)
             }
-            energy.append(EnergyFrame(rms: sqrt(largestPower / Double(count)), peak: peak))
-            mono.frameLength = buffer.frameLength
-            monoData[0].update(from: channels[selectedChannel], count: count)
-            analyzer.analyze(mono, atAudioFramePosition: position)
             progress(Double(file.framePosition) / Double(max(1, file.length)))
         }
-        analyzer.completeAnalysis()
-        while observer.completed.wait(timeout: .now() + 0.1) == .timedOut { try cancellation.check() }
+        analyzers.forEach { $0.completeAnalysis() }
+        for observer in observers {
+            while observer.completed.wait(timeout: .now() + 0.1) == .timedOut { try cancellation.check() }
+        }
         try cancellation.check()
-        return GainPlan.make(energy: energy, speech: try observer.result())
+        return try GainPlan.make(channelEnergy: channelEnergy, channelSpeech: observers.map { try $0.result() })
     }
 
     static func render(_ source: URL, to destination: URL, plan: GainPlan,

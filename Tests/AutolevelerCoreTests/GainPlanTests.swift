@@ -47,6 +47,35 @@ final class GainPlanTests: XCTestCase {
         XCTAssertLessThan(abs(plan.decibels[19]), abs(plan.decibels[3]))
     }
 
+    func testSpeechOnQuietChannelGetsLinkedGainWithoutOverboostingOtherChannel() {
+        let ambience = Array(repeating: frame(-20), count: 20)
+        let dialogue = Array(repeating: frame(-40), count: 20)
+        let plan = GainPlan.make(channelEnergy: [ambience, dialogue],
+                                 channelSpeech: [[], [speech(0, 1)]])
+        XCTAssertTrue(plan.speechDetected)
+        XCTAssertGreaterThan(plan.decibels[10], 5)
+        XCTAssertLessThanOrEqual(plan.decibels.max() ?? .infinity, 8.001)
+    }
+
+    func testVeryLoudNonSpeechChannelPreventsLinkedBoost() {
+        let ambience = Array(repeating: frame(-5), count: 20)
+        let dialogue = Array(repeating: frame(-40), count: 20)
+        let plan = GainPlan.make(channelEnergy: [ambience, dialogue],
+                                 channelSpeech: [[], [speech(0, 1)]])
+        XCTAssertTrue(plan.speechDetected)
+        XCTAssertLessThanOrEqual(plan.decibels.max() ?? .infinity, 0.001)
+    }
+
+    func testStereoGainReturnsToUnityDuringNonSpeech() {
+        let ambience = Array(repeating: frame(-35), count: 30)
+        let dialogue = Array(repeating: frame(-40), count: 10) + Array(repeating: frame(-120), count: 20)
+        let plan = GainPlan.make(channelEnergy: [ambience, dialogue],
+                                 channelSpeech: [[], [speech(0, 0.5)]])
+        XCTAssertTrue(plan.speechDetected)
+        XCTAssertGreaterThan(plan.decibels[3], 10)
+        XCTAssertEqual(plan.decibels[20], 0, accuracy: 0.001)
+    }
+
     func testCancellationTokenCheckThrowsAfterCancel() {
         let token = CancellationToken()
         token.cancel()

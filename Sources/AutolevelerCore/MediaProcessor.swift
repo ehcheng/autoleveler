@@ -18,6 +18,11 @@ struct MediaProbe: Decodable {
     let format: Format?
 }
 
+struct MediaOutputPlan: Equatable {
+    let fileExtension: String
+    let subtitleConversions: [Int]
+}
+
 public final class MediaProcessor: @unchecked Sendable {
     private let tools: MediaTools
     public init() throws { tools = try MediaTools(); Workspace.recover() }
@@ -53,6 +58,7 @@ public final class MediaProcessor: @unchecked Sendable {
         if options.codec == .mp3, tracks.contains(where: { ($0.channels ?? 2) > 2 }) {
             throw AutolevelerError.message("MP3 supports at most two channels. Choose AAC or PCM to preserve this file's channels.")
         }
+        let outputPlan = try Self.outputPlan(source: source, codec: options.codec, keepVideo: keepVideo, streams: media.streams)
         var leveled: [URL] = []
         var detected = false
         for (ordinal, track) in tracks.enumerated() {
@@ -76,7 +82,7 @@ public final class MediaProcessor: @unchecked Sendable {
             try manager.removeItem(at: decoded)
             leveled.append(processed)
         }
-        let outputExtension = Self.outputExtension(source: source, codec: options.codec, keepVideo: keepVideo, streams: media.streams)
+        let outputExtension = outputPlan.fileExtension
         let partial = try workspace.stage(in: destination, extension: outputExtension)
         var arguments = ["-v", "error"] + localProtocols + ["-i", source.path]
         let formatStart = Double(media.format?.start_time ?? "") ?? 0
@@ -90,6 +96,9 @@ public final class MediaProcessor: @unchecked Sendable {
         }
         for index in leveled.indices { arguments += ["-map", "\(index + 1):a:0"] }
         arguments += ["-map_metadata", "0", "-map_chapters", "0", "-c", "copy"]
+        for subtitleIndex in outputPlan.subtitleConversions {
+            arguments += ["-c:s:\(subtitleIndex)", "subrip"]
+        }
         for index in leveled.indices {
             arguments += ["-map_metadata:s:a:\(index)", "0:s:\(tracks[index].index)"]
             let disposition = (tracks[index].disposition ?? [:]).filter { $0.value != 0 }.keys.sorted().joined(separator: "+")
@@ -139,6 +148,30 @@ public final class MediaProcessor: @unchecked Sendable {
                 progress(min(1, max(0, micros / 1_000_000 / duration)))
             }
         }
+    }
+
+    static func outputPlan(source: URL, codec: AudioCodec, keepVideo: Bool, streams: [MediaProbe.Stream]) throws -> MediaOutputPlan {
+        let fileExtension = outputExtension(source: source, codec: codec, keepVideo: keepVideo, streams: streams)
+        guard keepVideo else { return MediaOutputPlan(fileExtension: fileExtension, subtitleConversions: []) }
+
+        let subtitles = streams.filter { $0.codec_type == "subtitle" }
+        var subtitleConversions: [Int] = []
+        for (outputIndex, subtitle) in subtitles.enumerated() {
+            let codecName = subtitle.codec_name ?? "unknown"
+            if fileExtension == "mkv" {
+                if codecName == "mov_text" {
+                    subtitleConversions.append(outputIndex)
+                } else if !["text", "subrip", "ass", "ssa", "webvtt", "dvd_subtitle", "dvb_subtitle", "hdmv_pgs_subtitle", "hdmv_text_subtitle", "arib_caption"].contains(codecName) {
+                    throw AutolevelerError.message("MKV output cannot preserve subtitle codec '\(codecName)'. Choose Audio only or a compatible input subtitle format.")
+                }
+            } else {
+                let compatible = fileExtension == "mov" ? ["mov_text", "eia_608"] : ["mov_text", "dvd_subtitle", "ttml"]
+                if !compatible.contains(codecName) {
+                    throw AutolevelerError.message("\(fileExtension.uppercased()) output cannot preserve subtitle codec '\(codecName)'. Choose Audio only or a compatible subtitle format.")
+                }
+            }
+        }
+        return MediaOutputPlan(fileExtension: fileExtension, subtitleConversions: subtitleConversions)
     }
 
     static func outputExtension(source: URL, codec: AudioCodec, keepVideo: Bool, streams: [MediaProbe.Stream]) -> String {
