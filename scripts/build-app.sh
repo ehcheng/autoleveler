@@ -9,15 +9,26 @@ SCRATCH_ROOT="${SWIFT_SCRATCH_PATH:-$ROOT_DIR/.build}"
 GUI_SCRATCH_DIR="${SWIFT_GUI_SCRATCH_PATH:-$SCRATCH_ROOT/gui}"
 CLI_SCRATCH_DIR="${SWIFT_CLI_SCRATCH_PATH:-$SCRATCH_ROOT/cli}"
 CONFIGURATION="release"
-BUILD_SYSTEM_ARGS=()
-if [[ -n "${SWIFT_BUILD_SYSTEM:-}" ]]; then
-  BUILD_SYSTEM_ARGS=(--build-system "$SWIFT_BUILD_SYSTEM")
-fi
 SWIFT_MODULE_CACHE="${SWIFT_MODULE_CACHE:-/private/tmp/autoleveler-swift-cache}"
 
 die() {
   printf 'build-app: %s\n' "$*" >&2
   exit 1
+}
+
+swift_build() {
+  local product="$1"
+  local scratch_path="$2"
+  local show_bin_path="${3:-false}"
+  local args=(-c "$CONFIGURATION" --product "$product" --arch arm64)
+  if [[ -n "${SWIFT_BUILD_SYSTEM:-}" ]]; then
+    args+=(--build-system "$SWIFT_BUILD_SYSTEM")
+  fi
+  args+=(--disable-sandbox --scratch-path "$scratch_path")
+  if [[ "$show_bin_path" == true ]]; then
+    args+=(--show-bin-path)
+  fi
+  swift build "${args[@]}"
 }
 
 require_command() {
@@ -29,6 +40,7 @@ require_command python3
 require_command codesign
 require_command otool
 require_command file
+require_command plutil
 [[ "$(uname -s)" == "Darwin" ]] || die "this script builds macOS bundles and must run on Darwin"
 [[ "$(uname -m)" == "arm64" ]] || die "build must run on an arm64 host/toolchain"
 [[ -f "$ROOT_DIR/Resources/Info.plist" ]] || die "missing parent-owned Resources/Info.plist"
@@ -39,24 +51,14 @@ rm -rf "$APP_DIR"
 
 export CLANG_MODULE_CACHE_PATH="$SWIFT_MODULE_CACHE"
 export SWIFTPM_MODULECACHE_OVERRIDE="$SWIFT_MODULE_CACHE"
-swift build \
-  -c "$CONFIGURATION" \
-  --product AutolevelerApp \
-  --arch arm64 "${BUILD_SYSTEM_ARGS[@]}" \
-  --disable-sandbox \
-  --scratch-path "$GUI_SCRATCH_DIR"
+swift_build AutolevelerApp "$GUI_SCRATCH_DIR"
 
-GUI_BIN_PATH="$(swift build -c "$CONFIGURATION" --product AutolevelerApp --arch arm64 "${BUILD_SYSTEM_ARGS[@]}" --disable-sandbox --scratch-path "$GUI_SCRATCH_DIR" --show-bin-path)"
+GUI_BIN_PATH="$(swift_build AutolevelerApp "$GUI_SCRATCH_DIR" true)"
 [[ -x "$GUI_BIN_PATH/AutolevelerApp" ]] || die "SwiftPM did not produce AutolevelerApp"
 
-swift build \
-  -c "$CONFIGURATION" \
-  --product autoleveler \
-  --arch arm64 "${BUILD_SYSTEM_ARGS[@]}" \
-  --disable-sandbox \
-  --scratch-path "$CLI_SCRATCH_DIR"
+swift_build autoleveler "$CLI_SCRATCH_DIR"
 
-CLI_BIN_PATH="$(swift build -c "$CONFIGURATION" --product autoleveler --arch arm64 "${BUILD_SYSTEM_ARGS[@]}" --disable-sandbox --scratch-path "$CLI_SCRATCH_DIR" --show-bin-path)"
+CLI_BIN_PATH="$(swift_build autoleveler "$CLI_SCRATCH_DIR" true)"
 [[ -x "$CLI_BIN_PATH/autoleveler" ]] || die "SwiftPM did not produce autoleveler"
 
 VERSION_DISPLAY="$("$CLI_BIN_PATH/autoleveler" --version)"
@@ -75,6 +77,11 @@ chmod 755 "$APP_DIR/Contents/MacOS/AutolevelerApp" "$APP_DIR/Contents/MacOS/auto
 if [[ -f "$ROOT_DIR/Resources/AppIcon.icns" ]]; then
   cp "$ROOT_DIR/Resources/AppIcon.icns" "$APP_DIR/Contents/Resources/AppIcon.icns"
 fi
+for license in LICENSE LICENSE.md; do
+  if [[ -f "$ROOT_DIR/$license" ]]; then
+    cp "$ROOT_DIR/$license" "$APP_DIR/Contents/Resources/$license"
+  fi
+done
 
 "$ROOT_DIR/scripts/build-media-tools.sh"
 python3 "$ROOT_DIR/scripts/bundle-tools.py" "$APP_DIR"
@@ -97,12 +104,24 @@ for binary in "$APP_DIR/Contents/MacOS/AutolevelerApp" "$APP_DIR/Contents/MacOS/
   done
 done
 
-# Sign helpers before the containing app so the final signature covers the
-# exact nested code that Gatekeeper will verify.
+# Sign every executable before the containing app so the final signature
+# covers the exact nested code that Gatekeeper will verify. Set
+# CODE_SIGN_IDENTITY to a Developer ID Application identity for distribution;
+# the default remains an ad-hoc signature for local builds.
+SIGNING_IDENTITY="${CODE_SIGN_IDENTITY:--}"
+SIGNING_ARGS=(--force --options runtime)
+if [[ "$SIGNING_IDENTITY" == "-" ]]; then
+  SIGNING_ARGS+=(--timestamp=none --sign -)
+else
+  SIGNING_ARGS+=(--timestamp --sign "$SIGNING_IDENTITY")
+fi
 for helper in "$APP_DIR/Contents/Helpers/ffmpeg" "$APP_DIR/Contents/Helpers/ffprobe"; do
-  codesign --force --timestamp=none --sign - "$helper"
+  codesign "${SIGNING_ARGS[@]}" "$helper"
 done
-codesign --force --timestamp=none --sign - "$APP_DIR"
+for executable in "$APP_DIR/Contents/MacOS/autoleveler" "$APP_DIR/Contents/MacOS/AutolevelerApp"; do
+  codesign "${SIGNING_ARGS[@]}" "$executable"
+done
+codesign "${SIGNING_ARGS[@]}" "$APP_DIR"
 codesign --verify --deep --strict "$APP_DIR"
 
 ZIP_PATH="$DIST_DIR/Autoleveler-${VERSION_SLUG}-macOS-arm64.zip"

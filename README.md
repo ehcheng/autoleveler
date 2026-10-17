@@ -1,23 +1,33 @@
 # Autoleveler
 
-**Drag and level!** *Automatic dialogue leveling for audio and video.*
+Drag and level! *Automatic dialogue leveling for audio and video.*
 
-A native Mac app for uneven dialogue. Drop in audio or video, bring quiet speech forward, and keep pauses quiet. Everything runs on your Mac.
+A recording can be too quiet throughout, or change volume every time someone moves away from the microphone. Autoleveler brings up quiet speech and compresses louder passages, while keeping pauses close to their original level. Drop in a batch of audio or video files and process them on your Mac.
 
-**Requires Apple silicon and macOS 14 or later.** The packaged app includes FFmpeg and FFprobe; Homebrew and Python are not required to use it.
+I wanted the convenience of Levelator for video with uneven dialogue. Autoleveler uses speech detection to decide where amplification makes sense. Video passes through without re-encoding, so there's no generation loss in the picture.
 
-## Use the app
+Requires an Apple silicon Mac running macOS 14 or later. FFmpeg and FFprobe are included; you don't need Homebrew or Python to use the app. Processing stays on your Mac, with no uploads or account required.
 
-Open `dist/Autoleveler.app`, or unzip `dist/Autoleveler-1.0.0-beta-macOS-arm64.zip`. You can move the app to Applications.
+## Install and use
 
-1. Drop one or more media files into the window, or choose **File → Open** (⌘O).
-2. Choose **Match input**, **Audio only**, or **Video + audio**.
-3. Keep AAC at 192 kb/s, or choose MP3 or 24-bit PCM. Choose a destination if needed.
-4. Choose **Start Processing** (⌘Return).
+Download the ZIP from [GitHub Releases](https://github.com/ehcheng/autoleveler/releases), unzip it, and move Autoleveler to Applications.
 
-Output defaults to the source folder, using `name-leveled.ext`. Existing files are never overwritten: subsequent outputs become `name-leveled-2.ext`, and so on. **Show** reveals the finished file in Finder. Failed or cancelled files can be retried or removed.
+1. Drop files into the window, or choose File → Open (⌘O).
+2. Choose Match input to keep video when present, Audio only to extract audio, or Video + audio to require video output.
+3. Keep the default AAC at 192 kb/s, or choose MP3 or 24-bit PCM. You can also choose an output folder.
+4. Click Start Processing (⌘Return).
 
-Cancel with the button or ⌘. Quitting also cancels the active job and waits for cleanup. Pending jobs remain unprocessed. Temporary audio and partial exports are deleted before cancellation completes. On the next launch, abandoned workspaces from an interrupted run are recovered without disturbing another running instance.
+By default, output goes beside the original file with a `-leveled` suffix. The original is untouched. If `interview-leveled.mov` already exists, the next output is `interview-leveled-2.mov`. Click Show to reveal a finished file in Finder.
+
+Cancel with the button or ⌘. Autoleveler stops its processing tools and deletes temporary audio and partial exports before cancellation completes. Quitting does the same for the active job. You can retry failed or cancelled files, or remove them from the queue. After an interrupted run, Autoleveler cleans up abandoned workspaces on the next launch.
+
+## What to expect
+
+The best use case is dialogue recorded at inconsistent levels: a quiet interview, clips recorded with different microphones, or someone moving around while speaking. Speech detection helps avoid amplifying an empty room just because it's quiet.
+
+There are limits. A distant voice buried in noise will still have noise when it's louder. The detector can miss whispers or mistake other sounds for speech. When it finds no confident speech, Autoleveler reports that and applies no gain boost (compression and peak limiting still apply). There is no noise gate to cut off words or remove room ambience.
+
+Autoleveler uses its own processing algorithm. It doesn't reproduce Levelator's proprietary algorithm, and it doesn't target a specified integrated LUFS value for broadcast delivery.
 
 ## Output formats
 
@@ -30,13 +40,13 @@ Cancel with the button or ⌘. Quitting also cancels the active job and waits fo
 | Video + PCM | MOV for compatible source codecs; otherwise MKV |
 | Video + MP3 | MKV |
 
-All processed audio uses 48 kHz. Video streams are copied without re-encoding. Video exports retain separate audio tracks and channel counts, available subtitles, chapters, and metadata; MKV also retains attachments. Data/timecode streams are not exported. Audio-only export uses the default audio track, or the first track when none is marked default. Embedded album art alone does not make an audio file a video input.
+Processed audio is 48 kHz. In video exports, Autoleveler processes separate audio tracks and preserves their channel counts and timing. It also retains available subtitles, chapters, and metadata; MKV exports retain attachments. Data and timecode streams are omitted. Audio-only exports use the default audio track, or the first track if none is marked default. Embedded album art doesn't count as video.
 
-MP3 supports mono/stereo; multichannel MP3 requests are rejected rather than silently downmixed. File support depends on FFmpeg's native demuxers and decoders. Damaged, encrypted, DRM-protected, or unsupported media produces an error. The bundled tools have networking disabled.
+MP3 supports mono or stereo. Autoleveler rejects multichannel MP3 requests rather than downmixing them. Input support depends on FFmpeg's demuxers and decoders. Damaged, encrypted, DRM-protected, or unsupported files produce an error. Networking is disabled in the bundled FFmpeg tools.
 
 ## Command line
 
-The CLI ships inside the app:
+The CLI is inside the app. These examples assume you've installed it in Applications:
 
 ```sh
 /Applications/Autoleveler.app/Contents/MacOS/autoleveler --help
@@ -45,53 +55,57 @@ The CLI ships inside the app:
 /Applications/Autoleveler.app/Contents/MacOS/autoleveler --format pcm take1.wav take2.wav
 ```
 
-Use `--` before filenames beginning with a hyphen. `-o` / `--output-dir` selects a folder. Completed output paths go to stdout; progress and errors go to stderr. A batch continues after a file error. Exit codes: `0` success, `1` file failures, `2` invalid arguments/setup, `130` cancellation. Ctrl-C and SIGTERM terminate the active process, clean up, and stop the batch.
+Use `--` before filenames that begin with a hyphen. `-o` or `--output-dir` selects an output folder. Output paths go to stdout; progress and errors go to stderr. A batch continues after a file error. Ctrl-C or SIGTERM cancels the active job, cleans up, and stops the batch.
 
-For development, `AUTOLEVELER_TOOLS=/path/to/tools` selects a directory containing both `ffmpeg` and `ffprobe`. The app otherwise prefers its bundled helpers. An unpackaged development build can use installed tools.
+Exit codes are `0` for success, `1` for file failures, `2` for invalid arguments or setup errors, and `130` for cancellation.
 
-## How the audio works
+## How leveling works
 
-Apple's built-in Sound Analysis classifier identifies likely speech locally, without transcription or a downloaded model (Apple, n.d.). The engine measures linked channel energy in 50 ms blocks, estimates the background level, and builds a smoothed gain curve around speech. It targets approximately −20 dBFS speech RMS, limits boosts to 24 dB, and returns toward unity through pauses. Channels share the gain curve to preserve their relative balance.
+Apple's Sound Analysis classifier identifies likely speech locally, without transcription or a downloaded model (Apple, n.d.). Autoleveler measures channel energy in 50 ms blocks and estimates the background level. It then calculates a smooth gain curve around speech, targeting approximately −20 dBFS RMS with a maximum boost of 24 dB. Gain returns toward unity during pauses. Channels share a gain curve to preserve their relative balance.
 
-A gentle compressor controls peaks after leveling. An oversampled limiter leaves 2 dB of sample-peak headroom before encoding and compensates for its lookahead delay. This is a dialogue leveling tool, not an exact LUFS delivery specification or an emulation of Levelator's proprietary algorithm. FFmpeg handles decoding, compression/limiting, encoding, and video stream copying (FFmpeg, n.d.).
+After leveling, FFmpeg applies gentle compression and an oversampled limiter with 2 dB of sample-peak headroom before encoding (FFmpeg, n.d.). Autoleveler compensates for the limiter's lookahead delay to preserve audio timing.
 
-Speech detection can miss whispers or distant voices and mistake some sounds for speech. Audio buried in noise cannot be made clean by gain alone. If speech is not detected, Autoleveler reports it and applies no gain boost; the output still passes through the peak-control/export stage. No noise gate cuts words or removes the original ambience.
+Decoded audio is stored temporarily on disk. Long multichannel recordings need substantial free space on the Mac's temporary volume. The partial export is staged in the output folder and renamed only when processing finishes.
 
-Processing uses temporary decoded audio on disk and streams samples through memory. Long multichannel recordings need substantial free space in the Mac's temporary volume; a partial export is staged in the output folder and published with an exclusive atomic rename.
+## Build and verify
 
-## Versioning
-
-Current release: **1.0.0 beta**, build **1**. Release notes live in [CHANGELOG.md](CHANGELOG.md).
-
-`Sources/AutolevelerCore/AppVersion.swift` defines the release number and channel used by the window, About panel, CLI, bundle display metadata, and ZIP filename. For each new distributed build, increment `CFBundleVersion` in `Resources/Info.plist`. The bundle's numeric marketing version is generated from the shared release identity during packaging.
-
-## Build
-
-Requires Xcode command-line tools, Swift 5.9 or later, an Apple silicon Mac, and internet access for the first media-tool build.
+Building requires Xcode command-line tools, Swift 5.9 or later, an Apple silicon Mac, and internet access for the first media-tool build.
 
 ```sh
 ./scripts/build-app.sh
 ```
 
-The build verifies pinned FFmpeg/LAME source checksums, compiles static arm64 helpers with a macOS 14 deployment target, builds both Swift executables, assembles the app, signs it ad hoc, and creates a ZIP in `dist/`. Third-party source archives, licenses, and the full media-tool build configuration are included inside the app. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+The script verifies pinned FFmpeg and LAME source checksums, builds static arm64 helpers for macOS 14, and packages the app and CLI into `dist/`. Local builds are signed ad hoc. Set `CODE_SIGN_IDENTITY` to your Developer ID Application identity to sign a distribution build with Hardened Runtime and a secure timestamp. Third-party source archives, licenses, and build configuration are included in the app; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
-The bundle is ad hoc signed for local use. Public distribution still needs Developer ID signing and Apple notarization. Compatibility is built for macOS 14; runtime testing in this workspace was on macOS 26, not a macOS 14 machine.
-
-To regenerate the icon:
+To notarize a signed build, store your Apple credentials with `xcrun notarytool store-credentials` first, then run:
 
 ```sh
-swift scripts/generate-icon.swift .build/AppIcon.iconset
-iconutil -c icns .build/AppIcon.iconset -o Resources/AppIcon.icns
+./scripts/notarize-release.sh \
+  dist/Autoleveler.app \
+  dist/Autoleveler-1.0.0-macOS-arm64.zip \
+  YOUR_KEYCHAIN_PROFILE
 ```
 
-## Verify
+The script submits the app to Apple, saves the notarization log, staples the ticket, checks Gatekeeper acceptance, and creates the final ZIP and SHA-256 checksum. It stops if notarization fails.
+
+For development, `AUTOLEVELER_TOOLS=/path/to/tools` selects a folder containing both `ffmpeg` and `ffprobe`. An unpackaged build can also use installed tools.
 
 ```sh
 swift test
 python3 scripts/integration-test.py --cli "$(swift build --show-bin-path)/autoleveler"
 ```
 
-Integration tests use macOS `say` to create speech and an FFmpeg installation with `libx264` for the video fixture. A valid speech recording can be supplied with `--speech-fixture /path/to/speech.wav`. The tested path covers speech leveling, noise, silence, encoded peaks, AAC/MP3/PCM, output collisions, copied video, invalid inputs, and cancellation. To exercise a packaged app, pass its CLI path and set `AUTOLEVELER_TOOLS` to its `Contents/Helpers` directory.
+The integration tests use macOS `say` for a speech fixture and an FFmpeg installation with `libx264` for video. You can supply a recording with `--speech-fixture /path/to/speech.wav`. Tests cover speech leveling, noise and silence, encoded peaks, export formats, copied video, track timing, output collisions, invalid inputs, and cancellation. To test a packaged app, pass its CLI path and set `AUTOLEVELER_TOOLS` to its `Contents/Helpers` folder.
+
+Runtime testing during development was on macOS 26. The deployment target is macOS 14; runtime behavior on macOS 14 hasn't been verified.
+
+Release notes are in [CHANGELOG.md](CHANGELOG.md). `Sources/AutolevelerCore/AppVersion.swift` defines the release version; `CFBundleVersion` in `Resources/Info.plist` identifies each distributed build.
+
+## License and credits
+
+Autoleveler's source is available under the [MIT license](LICENSE), copyright 2026 Eric Cheng. Bundled FFmpeg and LAME retain their own licenses, documented in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
+[Eric Cheng · echeng.com](https://echeng.com)
 
 ## References
 
